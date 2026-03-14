@@ -1,0 +1,224 @@
+/*
+*********************************************************************************************************
+*                                            EXAMPLE CODE
+*
+*               This file is provided as an example on how to use Micrium products.
+*
+*               Please feel free to use any application code labeled as 'EXAMPLE CODE' in
+*               your application products.  Example code may be used as is, in whole or in
+*               part, or may be used as a reference only. This file can be modified as
+*               required to meet the end-product requirements.
+*
+*               Please help us continue to provide the Embedded community with the finest
+*               software available.  Your honesty is greatly appreciated.
+*
+*               You can find our product's user manual, API reference, release notes and
+*               more information at https://doc.micrium.com.
+*               You can contact us at www.micrium.com.
+*********************************************************************************************************
+*/
+
+/*
+*********************************************************************************************************
+*
+*                                              uC/OS-II
+*                                            EXAMPLE CODE
+*
+* Filename : main.c
+*********************************************************************************************************
+*/
+
+/*
+*********************************************************************************************************
+*                                            INCLUDE FILES
+*********************************************************************************************************
+*/
+
+#include  <cpu.h>
+#include  <lib_mem.h>
+#include  <os.h>
+
+#include  "app_cfg.h"
+
+
+/*
+*********************************************************************************************************
+*                                            LOCAL DEFINES
+*********************************************************************************************************
+*/
+
+
+/*
+*********************************************************************************************************
+*                                       LOCAL GLOBAL VARIABLES
+*********************************************************************************************************
+*/
+
+#define TASK_STACKSIZE 2048
+
+static  OS_STK  StartupTaskStk[APP_CFG_STARTUP_TASK_STK_SIZE];
+
+
+/*
+*********************************************************************************************************
+*                                         FUNCTION PROTOTYPES
+*********************************************************************************************************
+*/
+static void task(void* p_arg);
+static  void  StartupTask (void  *p_arg);
+
+
+/*
+*********************************************************************************************************
+*                                                main()
+*
+* Description : This is the standard entry point for C code.  It is assumed that your code will call
+*               main() once you have performed all necessary initialization.
+*
+* Arguments   : none
+*
+* Returns     : none
+*
+* Notes       : none
+*********************************************************************************************************
+*/
+
+int  main (void)
+{
+#if OS_TASK_NAME_EN > 0u
+    CPU_INT08U  os_err;
+#endif
+    
+
+    CPU_IntInit();
+
+    Mem_Init();                                                 /* Initialize Memory Managment Module                   */
+    CPU_IntDis();                                               /* Disable all Interrupts                               */
+    CPU_Init();                                                 /* Initialize the uC/CPU services                       */
+
+    OSInit();                                                   /* Initialize uC/OS-II                                  */
+    
+    /*Initialize Output File*/
+    OutFileInit();
+
+    /*Input File*/
+    InputFile();
+    /*Dynamic Create the Stack size*/
+    Task_STK = malloc(TASK_NUMBER * sizeof(int*));
+
+    ready_list = (FIFO_list*)malloc(sizeof(FIFO_list));
+    ready_list->front = NULL;
+    ready_list->rear = NULL;
+
+    // printf("TaskNumber: %d\n", TASK_NUMBER);
+    int n;
+    for (n = 0; n < TASK_NUMBER; n++) {
+        Task_STK[n] = malloc(TASK_STACKSIZE * sizeof(int));
+    }
+    /*Create Task Set*/
+    for (int i = 0; i < TASK_NUMBER; i++) {
+        OSTaskCreateExt(task,          /*Create the task*/
+            &TaskParameter[i],
+            &Task_STK[i][TASK_STACKSIZE - 1],
+            TaskParameter[i].TaskPriority,
+            TaskParameter[i].TaskID,
+            &Task_STK[i][0],
+            TASK_STACKSIZE,
+            &TaskParameter[i],
+            (OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR));
+        if (TaskParameter[i].TaskArriveTime == 0) {
+            Node* newNode = (Node*)malloc(sizeof(Node));
+            newNode->ID = i;
+            newNode->next = NULL;
+            if (ready_list->rear == NULL) {
+                ready_list->front = ready_list->rear = newNode;
+            }
+            else {
+                ready_list->rear->next = newNode;
+                ready_list->rear = newNode;
+            }
+        }
+    }
+
+    
+    printf("================TCB linked list================\n");
+    printf("Task\tPrev_TCB_addr\tTCB_addr  Next_TCB_addr\n");
+
+    OS_TCB* pCurTCB = OSTCBList;
+    while (pCurTCB) {
+        printf("%2d\t     %6x\t  %6x       %6x\n", (pCurTCB->OSTCBPrio == OS_TASK_IDLE_PRIO) ? 
+            pCurTCB->OSTCBPrio : pCurTCB->OSTCBId, pCurTCB->OSTCBPrev, pCurTCB, pCurTCB->OSTCBNext);
+        pCurTCB = pCurTCB->OSTCBNext;
+    }
+    missdeadline = TASK_NUMBER + 1;
+    printf("Tick\tEvent\t\tCurrentTask ID\tNextTask ID\tResponseTime\tPreemptionTime\tOSTimeDly\n");
+/*
+#if OS_TASK_NAME_EN > 0u
+    OSTaskNameSet(         APP_CFG_STARTUP_TASK_PRIO,
+                  (INT8U *)"Startup Task",
+                           &os_err);
+#endif
+*/
+    OSTimeSet(0);
+    OSStart();                                                  /* Start multitasking (i.e. give control to uC/OS-II)   */
+
+    while (DEF_ON) {                                            /* Should Never Get Here.                               */
+        ;
+    }
+}
+
+
+
+void task(void* p_arg) {
+    task_para_set* task_data;
+    task_data = p_arg;
+    while (1) {
+        if (task_data->TaskNumber == 0 && OSTimeGet() < task_data->TaskArriveTime) {
+            OSTimeDly(task_data->TaskArriveTime - OSTimeGet());
+        }
+        if (task_data->TaskCurrentExecutionTime == 0) {
+            OSTimeDly(task_data->TaskPeriodic - 
+                (OSTimeGet() - (task_data->TaskNumber * task_data->TaskPeriodic + task_data->TaskArriveTime)));
+        }
+    }
+}
+
+
+/*
+*********************************************************************************************************
+*                                            STARTUP TASK
+*
+* Description : This is an example of a startup task.  As mentioned in the book's text, you MUST
+*               initialize the ticker only once multitasking has started.
+*
+* Arguments   : p_arg   is the argument passed to 'StartupTask()' by 'OSTaskCreate()'.
+*
+* Returns     : none
+*
+* Notes       : 1) The first line of code is used to prevent a compiler warning because 'p_arg' is not
+*                  used.  The compiler should not generate any code for this statement.
+*********************************************************************************************************
+*/
+
+static  void  StartupTask (void *p_arg)
+{
+   (void)p_arg;
+
+    OS_TRACE_INIT();                                            /* Initialize the uC/OS-II Trace recorder               */
+
+#if OS_CFG_STAT_TASK_EN > 0u
+    OSStatTaskCPUUsageInit(&err);                               /* Compute CPU capacity with no task running            */
+#endif
+
+#ifdef CPU_CFG_INT_DIS_MEAS_EN
+    CPU_IntDisMeasMaxCurReset();
+#endif
+    
+    APP_TRACE_DBG(("uCOS-III is Running...\n\r"));
+
+    while (DEF_TRUE) {                                          /* Task body, always written as an infinite loop.       */
+        OSTimeDlyHMSM(0u, 0u, 1u, 0u);
+		APP_TRACE_DBG(("Time: %d\n\r", OSTimeGet()));
+    }
+}
+
